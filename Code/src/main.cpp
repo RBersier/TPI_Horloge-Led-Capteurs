@@ -222,18 +222,26 @@ void initHT16K33() {
 void testHT16K33() {
   if (!ht16ok) return;
 
+  static bool showAllSegments = false;
   uint32_t now = millis();
   if (now - lastSeqTime > 800) {
     lastSeqTime = now;
-    const char* word = seqChars[seqIdx % 5];
-    Serial.print(F("  Affichage : ")); Serial.println(word);
-
     alpha4.clear();
-    for (int i = 0; i < 4; i++) {
-      alpha4.writeDigitAscii(i, word[i]);
+    if (showAllSegments) {
+      Serial.println(F("  Affichage : [ALL SEGMENTS ON]"));
+      for (int i = 0; i < 4; i++) {
+        alpha4.writeDigitRaw(i, 0xFFFF);
+      }
+    } else {
+      const char* word = seqChars[seqIdx % 5];
+      Serial.print(F("  Affichage : ")); Serial.println(word);
+      for (int i = 0; i < 4; i++) {
+        alpha4.writeDigitAscii(i, word[i]);
+      }
+      seqIdx++;
     }
     alpha4.writeDisplay();
-    seqIdx++;
+    showAllSegments = !showAllSegments;
   }
 }
 
@@ -295,8 +303,8 @@ void testNeoPixelRing() {
 }
 
 void testAll() {
-  Serial.println(F("\n── TEST INTÉGRATION (ALL) ──────────────"));
-  Serial.println(F("Vérification de tous les composants...\n"));
+  Serial.println(F("\n-- TEST INTEGRATION (ALL) --------------"));
+  Serial.println(F("Verification de tous les composants...\n"));
 
   bool allOk = true;
 
@@ -305,7 +313,7 @@ void testAll() {
   if (rtc.begin() && rtc.isrunning()) {
     Serial.println(F("[OK]"));
   } else {
-    Serial.println(F("[ERREUR] Non détecté ou arrêté !"));
+    Serial.println(F("[ERREUR] Non detecte ou arrete !"));
     allOk = false;
   }
 
@@ -314,7 +322,7 @@ void testAll() {
   if (bme.begin(0x76)) {
     Serial.println(F("[OK]"));
   } else {
-    Serial.println(F("[ERREUR] Non détecté !"));
+    Serial.println(F("[ERREUR] Non detecte !"));
     allOk = false;
   }
 
@@ -327,18 +335,28 @@ void testAll() {
   alpha4.writeDigitAscii(2, 'S');
   alpha4.writeDigitAscii(3, 'T');
   alpha4.writeDisplay();
-  Serial.println(F("[OK] 'TEST' affiché"));
+  Serial.println(F("[OK] 'TEST' affiche"));
+
+  // Ring NeoPixel
+  Serial.print(F("  NEOPIXEL    ... "));
+  ring60.begin();
+  ring60.setBrightness(40);
+  ring60.clear();
+  ring60.setPixelColor(0, ring60.Color(255, 0, 0));
+  ring60.setPixelColor(20, ring60.Color(0, 255, 0));
+  ring60.setPixelColor(40, ring60.Color(0, 0, 255));
+  ring60.show();
+  Serial.println(F("[OK] 3 LEDs RGB affichees"));
 
   // Boutons
-  Serial.println(F("  BOUTONS     ... [OK] (testés visuellement)"));
-  Serial.println(F("    D2 D3 D4 D5 D7 D8 — utiliser test 4 pour vérification"));
+  Serial.println(F("  BOUTONS     ... [OK] (testes visuellement)"));
+  Serial.println(F("    D2 D3 D4 D5 D7 D8 - utiliser test 4 pour verification"));
 
-  // Résumé
+  // Resume
   Serial.println();
   if (allOk) {
-    Serial.println(F("✔ Tous les composants I2C sont détectés."));
-    Serial.println(F("✔ Intégration prête."));
-    // Afficher CHECK sur HT16K33
+    Serial.println(F("[OK] Tous les composants I2C sont detectes."));
+    Serial.println(F("[OK] Integration prete."));
     alpha4.clear();
     alpha4.writeDigitAscii(0, 'O');
     alpha4.writeDigitAscii(1, 'K');
@@ -346,8 +364,8 @@ void testAll() {
     alpha4.writeDigitAscii(3, ' ');
     alpha4.writeDisplay();
   } else {
-    Serial.println(F("✗ Un ou plusieurs composants sont en erreur."));
-    Serial.println(F("  → Vérifier le câblage et les adresses I2C."));
+    Serial.println(F("[ERREUR] Un ou plusieurs composants sont en erreur."));
+    Serial.println(F("  -> Verifier le cablage et les adresses I2C."));
   }
 
   activeTest = 0;
@@ -362,3 +380,4 @@ void printTwoDigits(int n) {
   if (n < 10) Serial.print(F("0"));
   Serial.print(n);
 }
+
