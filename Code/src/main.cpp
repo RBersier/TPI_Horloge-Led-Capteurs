@@ -104,6 +104,8 @@ enum DisplayItem : uint8_t {
 DisplayItem currentDisplayItem = DISP_AIR;
 uint32_t lastDisplaySwitchMs = 0;
 bool showTagForCurrentItem = true;
+bool tagDisplayActive = false;
+uint32_t tagDisplayUntilMs = 0;
 
 // ============================================================
 // Mode configuration horaire/date
@@ -198,18 +200,34 @@ void displayHumidity(float hum) {
 
 void displayDateDDMM(const DateTime &now) {
   // Affiche la date au format DD.MM (point via decimal point).
+  static uint8_t lastValidDay = 1;
+  static uint8_t lastValidMonth = 1;
+
+  uint8_t day = now.day();
+  uint8_t month = now.month();
+
+  // Protection contre les lectures transitoires invalides (ex: 00.00).
+  if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+    lastValidDay = day;
+    lastValidMonth = month;
+  } else {
+    day = lastValidDay;
+    month = lastValidMonth;
+  }
+
   alpha4.clear();
-  alpha4.writeDigitAscii(0, (char)('0' + (now.day() / 10)));
-  alpha4.writeDigitAscii(1, (char)('0' + (now.day() % 10)), true);
-  alpha4.writeDigitAscii(2, (char)('0' + (now.month() / 10)));
-  alpha4.writeDigitAscii(3, (char)('0' + (now.month() % 10)));
+  alpha4.writeDigitAscii(0, (char)('0' + (day / 10)));
+  alpha4.writeDigitAscii(1, (char)('0' + (day % 10)), true);
+  alpha4.writeDigitAscii(2, (char)('0' + (month / 10)));
+  alpha4.writeDigitAscii(3, (char)('0' + (month % 10)));
   alpha4.writeDisplay();
 }
 
 void showTagThenValue(const char *tag) {
-  // Affiche d'abord le TAG (ex: TEMP), puis la valeur ensuite.
+  // Affiche le TAG (ex: TEMP) sans bloquer la boucle principale.
   display4(tag);
-  delay(600);
+  tagDisplayActive = true;
+  tagDisplayUntilMs = millis() + 600;
 }
 
 int estimatePpmFromGasModel(float gasOhmFiltered, float gasOhmBaseline, float tempC, float humPct) {
@@ -421,13 +439,13 @@ void renderRingClock(const DateTime &now) {
 
     uint8_t mask = (hourOn ? 0x1 : 0x0) | (minOn ? 0x2 : 0x0) | (secOn ? 0x4 : 0x0);
     switch (mask) {
-      case 0x1: ring.setPixelColor(i, ring.Color(COL_R, 0, 0)); break;                    // heure
-      case 0x2: ring.setPixelColor(i, ring.Color(0, COL_G, 0)); break;                    // minute
-      case 0x4: ring.setPixelColor(i, ring.Color(0, 0, COL_B)); break;                    // seconde
-      case 0x3: ring.setPixelColor(i, ring.Color(COL_R, COL_G, 0)); break;                // heure+minute
-      case 0x5: ring.setPixelColor(i, ring.Color(COL_R, 0, COL_B)); break;                // heure+seconde
-      case 0x6: ring.setPixelColor(i, ring.Color(0, 110, 35)); break;                      // minute+seconde (cyan tire vers vert)
-      case 0x7: ring.setPixelColor(i, ring.Color(COL_R, COL_G, COL_B)); break;            // les 3
+      case 0x1: ring.setPixelColor(i, ring.Color(COL_R, 0, 0)); break;              // heure
+      case 0x2: ring.setPixelColor(i, ring.Color(0, COL_G, 0)); break;              // minute
+      case 0x4: ring.setPixelColor(i, ring.Color(0, 0, COL_B)); break;              // seconde
+      case 0x3: ring.setPixelColor(i, ring.Color(COL_R, COL_G, 0)); break;            // heure+minute
+      case 0x5: ring.setPixelColor(i, ring.Color(COL_R, 0, COL_B)); break;            // heure+seconde
+      case 0x6: ring.setPixelColor(i, ring.Color(0, 110, 35)); break;             // minute+seconde (cyan tire vers vert)
+      case 0x7: ring.setPixelColor(i, ring.Color(COL_R, COL_G, COL_B)); break;          // les 3
       default: break;
     }
   }
@@ -486,6 +504,15 @@ void updateDisplay(const DateTime &now) {
     lastDisplaySwitchMs = nowMs;
     currentDisplayItem = (DisplayItem)((currentDisplayItem + 1) % DISP_COUNT);
     showTagForCurrentItem = true;
+    tagDisplayActive = false;
+  }
+
+  // Si un TAG est en cours d'affichage, on attend sa fin (non bloquant).
+  if (tagDisplayActive) {
+    if ((int32_t)(nowMs - tagDisplayUntilMs) < 0) {
+      return;
+    }
+    tagDisplayActive = false;
   }
 
   switch (currentDisplayItem) {
@@ -493,6 +520,7 @@ void updateDisplay(const DateTime &now) {
       if (showTagForCurrentItem) {
         showTagThenValue("eCO2");
         showTagForCurrentItem = false;
+        return;
       }
       if (envValid) displayNumber4(envPpmEstimate);
       else display4("----");
@@ -501,6 +529,7 @@ void updateDisplay(const DateTime &now) {
       if (showTagForCurrentItem) {
         showTagThenValue("TEMP");
         showTagForCurrentItem = false;
+        return;
       }
       displayTemp(tempCompC);
       break;
@@ -508,6 +537,7 @@ void updateDisplay(const DateTime &now) {
       if (showTagForCurrentItem) {
         showTagThenValue("HUMD");
         showTagForCurrentItem = false;
+        return;
       }
       displayHumidity(envHumPct);
       break;
@@ -515,6 +545,7 @@ void updateDisplay(const DateTime &now) {
       if (showTagForCurrentItem) {
         showTagThenValue("ATMO");
         showTagForCurrentItem = false;
+        return;
       }
       if (envValid) displayNumber4((int)round(envPressureHpa));
       else display4("----");
@@ -523,6 +554,7 @@ void updateDisplay(const DateTime &now) {
       if (showTagForCurrentItem) {
         showTagThenValue("DATE");
         showTagForCurrentItem = false;
+        return;
       }
       displayDateDDMM(now);
       break;
@@ -552,6 +584,7 @@ void onMenuButton(const DateTime &now) {
     configField = 0;
     lastDisplaySwitchMs = millis();
     showTagForCurrentItem = true;
+    tagDisplayActive = false;
   }
 }
 
@@ -616,6 +649,7 @@ void handleButtons(const DateTime &now) {
     currentDisplayItem = (DisplayItem)((currentDisplayItem + 1) % DISP_COUNT);
     lastDisplaySwitchMs = millis();
     showTagForCurrentItem = true;
+    tagDisplayActive = false;
   }
 
   if (consumePress(4)) {
@@ -670,6 +704,8 @@ void setup() {
   lastEnvReadMs = 0;
   lastEnvSuccessMs = millis();
   baselineStartMs = millis();
+  showTagForCurrentItem = true;
+  tagDisplayActive = false;
 }
 
 void loop() {
