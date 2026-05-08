@@ -54,6 +54,9 @@ static const uint16_t DEBOUNCE_MS = 40;
 static const uint32_t ENV_READ_MS = 2000;
 static const uint32_t DISPLAY_ROTATE_MS = 10000;
 static const float TEMP_OFFSET_C = -2.5f;
+// Duree d'affichage d'un TAG (TEMP/HUMD/...) avant la valeur.
+static const uint16_t TAG_DISPLAY_MS = 600;
+// Remarque: toutes les temporisations utilisent millis() (non bloquant).
 
 // ============================================================
 // Objets librairies
@@ -106,6 +109,8 @@ uint32_t lastDisplaySwitchMs = 0;
 bool showTagForCurrentItem = true;
 bool tagDisplayActive = false;
 uint32_t tagDisplayUntilMs = 0;
+// showTagForCurrentItem: affiche le TAG au prochain rendu de page.
+// tagDisplayActive/tagDisplayUntilMs: fenetre non bloquante du TAG.
 
 // ============================================================
 // Mode configuration horaire/date
@@ -149,6 +154,7 @@ static inline uint8_t daysInMonth(int month, int year) {
 
 void display4(const char *txt) {
   // Affiche exactement 4 caracteres (ou espaces) sur le HT16K33.
+  // Exemple: "TEMP", "1234", "----"
   alpha4.clear();
   for (uint8_t i = 0; i < 4; i++) {
     char c = txt[i] ? txt[i] : ' ';
@@ -159,6 +165,7 @@ void display4(const char *txt) {
 
 void displayNumber4(int value) {
   // Formate un entier sur 4 caracteres (aligne a droite).
+  // Exemple: 42 devient "  42"
   char buf[5];
   snprintf(buf, sizeof(buf), "%4d", value);
   display4(buf);
@@ -225,9 +232,10 @@ void displayDateDDMM(const DateTime &now) {
 
 void showTagThenValue(const char *tag) {
   // Affiche le TAG (ex: TEMP) sans bloquer la boucle principale.
+  // Le TAG reste visible pendant TAG_DISPLAY_MS puis la valeur prend la suite.
   display4(tag);
   tagDisplayActive = true;
-  tagDisplayUntilMs = millis() + 600;
+  tagDisplayUntilMs = millis() + TAG_DISPLAY_MS;
 }
 
 int estimatePpmFromGasModel(float gasOhmFiltered, float gasOhmBaseline, float tempC, float humPct) {
@@ -235,15 +243,19 @@ int estimatePpmFromGasModel(float gasOhmFiltered, float gasOhmBaseline, float te
   // - ratio gaz baseline / gaz courant
   // - conversion non-lineaire pour mieux suivre les degradations
   // - compensation temperature/humidite a faible amplitude
+  // Cette valeur est une estimation relative (pas une mesure CO2 NDIR absolue).
   if (gasOhmFiltered <= 1.0f || gasOhmBaseline <= 1.0f) return 400;
 
+  // ratio > 1.0 => air plus charge qu'au niveau "propre" de baseline.
   float ratio = gasOhmBaseline / gasOhmFiltered;
   if (ratio < 0.5f) ratio = 0.5f;
   if (ratio > 6.0f) ratio = 6.0f;
+  // Bornes de securite pour eviter les extremes numeriques.
 
   // Courbe non-lineaire plus sensible:
   // eCO2 ~= 400 * ratio^k avec k ajuste pour mieux suivre les hausses marquées.
   // Ex: ratio 1.25 donne environ ~1150 ppm.
+  // k regle la sensibilite globale de la courbe PPM~.
   const float k = 5.0f;
   float ppm = 400.0f * powf(ratio, k);
 
@@ -258,10 +270,12 @@ int estimatePpmFromGasModel(float gasOhmFiltered, float gasOhmBaseline, float te
 
 void updateButtons() {
   // Lit les boutons avec debounce et genere des evenements "front descendant".
+  // INPUT_PULLUP: LOW = appui, HIGH = relache.
   uint32_t nowMs = millis();
   for (uint8_t i = 0; i < 6; i++) {
     bool reading = digitalRead(BTN_PINS[i]);
     if (reading != btnLastReading[i]) {
+      // Changement brut detecte: restart fenetre anti-rebond.
       btnLastChangeMs[i] = nowMs;
       btnLastReading[i] = reading;
     }
@@ -279,6 +293,7 @@ void updateButtons() {
 
 bool consumePress(uint8_t idx) {
   // Consomme un evenement d'appui unique (une fois par clic).
+  // Retourne true uniquement une fois par pression.
   if (!btnPressedEvent[idx]) return false;
   btnPressedEvent[idx] = false;
   return true;
@@ -347,6 +362,7 @@ void displayConfigField() {
 
 void updateEnvironmentRead() {
   // Fait une lecture BME680 periodique (toutes les ENV_READ_MS).
+  // Cette fonction met a jour toutes les variables "env*".
   uint32_t nowMs = millis();
   if (nowMs - lastEnvReadMs < ENV_READ_MS) return;
   lastEnvReadMs = nowMs;
@@ -380,6 +396,7 @@ void updateEnvironmentRead() {
   envGasOhm = bme.gas_resistance;
 
   // 1) Filtrage du signal gaz (anti-bruit)
+  // Plus stable visuellement et numeriquement qu'une mesure brute.
   if (!gasFilterValid) {
     gasFilteredOhm = (float)envGasOhm;
     gasFilterValid = true;
@@ -390,6 +407,7 @@ void updateEnvironmentRead() {
   // 2) Baseline adaptative "air propre observe"
   //    - Warmup: pendant ~3 min, on construit une baseline stable
   //    - Ensuite: baseline ne redescend plus (evite la chute artificielle des PPM)
+  //    - Elle ne monte que si un air meilleur est observe.
   if (!gasBaselineValid) {
     gasBaselineOhm = gasFilteredOhm;
     gasBaselineValid = true;
@@ -402,6 +420,7 @@ void updateEnvironmentRead() {
       }
     } else {
       // Regime normal: baseline monotone (pas de derive descendante).
+      // On accepte uniquement les mises a jour vers le haut.
       if (gasFilteredOhm > gasBaselineOhm) {
         gasBaselineOhm = (gasBaselineOhm * 0.95f) + (gasFilteredOhm * 0.05f);
       }
@@ -409,6 +428,7 @@ void updateEnvironmentRead() {
   }
 
   // 3) Estimation eCO2
+  // Le resultat est ensuite utilise pour l'affichage et le seuil d'alerte.
   envPpmEstimate = estimatePpmFromGasModel(gasFilteredOhm, gasBaselineOhm, tempCompC, envHumPct);
 
   // Si l'air redevient bon, on rearme l'alerte.
@@ -499,6 +519,7 @@ void updateDisplay(const DateTime &now) {
   }
 
   // En mode normal: rotation automatique toutes les 10s.
+  // A chaque changement de page, on montre d'abord le TAG.
   uint32_t nowMs = millis();
   if ((nowMs - lastDisplaySwitchMs) >= DISPLAY_ROTATE_MS) {
     lastDisplaySwitchMs = nowMs;
@@ -508,6 +529,7 @@ void updateDisplay(const DateTime &now) {
   }
 
   // Si un TAG est en cours d'affichage, on attend sa fin (non bloquant).
+  // return ici evite d'ecraser le TAG avec la valeur dans le meme tour.
   if (tagDisplayActive) {
     if ((int32_t)(nowMs - tagDisplayUntilMs) < 0) {
       return;
@@ -516,8 +538,12 @@ void updateDisplay(const DateTime &now) {
   }
 
   switch (currentDisplayItem) {
+    // Chaque case suit le meme schema:
+    // 1) TAG
+    // 2) valeur
     case DISP_AIR:
       if (showTagForCurrentItem) {
+        // TAG puis valeur au tour suivant.
         showTagThenValue("eCO2");
         showTagForCurrentItem = false;
         return;
