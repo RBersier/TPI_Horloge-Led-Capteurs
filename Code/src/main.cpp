@@ -438,34 +438,44 @@ void updateEnvironmentRead() {
 }
 
 void renderRingClock(const DateTime &now) {
-  // Dessine l'horloge analogique sur 60 LEDs:
-  // - seconde (bleu, trainée cumulee de 0 a seconde courante)
-  // - minute (vert)
-  // - heure (rouge)
-  // Couleurs de chevauchement:
-  // - heure + minute = jaune
-  // - heure + seconde = magenta
-  // - minute + seconde = cyan
-  // - heure + minute + seconde = blanc
+  // Melanges explicites avec masque de bits:
+  // bit0=heure, bit1=minute, bit2=marqueur blanc, bit3=seconde
   uint8_t hourPos = (uint8_t)((now.hour() % 12) * 5);
   uint8_t minPos = (uint8_t)now.minute();
   uint8_t sec = (uint8_t)now.second();
 
   ring.clear();
   for (uint8_t i = 0; i < RING_LED_COUNT; i++) {
-    bool secOn = (i <= sec);       // trainée seconde: 0..sec (reset naturel a 00)
-    bool minOn = (i == minPos);
     bool hourOn = (i == hourPos);
+    bool minOn = (i == minPos);
+    bool markerOn = ((i % 5) == 0);
+    bool secOn = (i <= sec);
 
-    uint8_t mask = (hourOn ? 0x1 : 0x0) | (minOn ? 0x2 : 0x0) | (secOn ? 0x4 : 0x0);
+    uint8_t mask = (hourOn ? 0x1 : 0) |
+                   (minOn ? 0x2 : 0) |
+                   (markerOn ? 0x4 : 0) |
+                   (secOn ? 0x8 : 0);
+
     switch (mask) {
-      case 0x1: ring.setPixelColor(i, ring.Color(COL_R, 0, 0)); break;              // heure
-      case 0x2: ring.setPixelColor(i, ring.Color(0, COL_G, 0)); break;              // minute
-      case 0x4: ring.setPixelColor(i, ring.Color(0, 0, COL_B)); break;              // seconde
-      case 0x3: ring.setPixelColor(i, ring.Color(COL_R, COL_G, 0)); break;            // heure+minute
-      case 0x5: ring.setPixelColor(i, ring.Color(COL_R, 0, COL_B)); break;            // heure+seconde
-      case 0x6: ring.setPixelColor(i, ring.Color(0, 110, 35)); break;             // minute+seconde (cyan tire vers vert)
-      case 0x7: ring.setPixelColor(i, ring.Color(COL_R, COL_G, COL_B)); break;          // les 3
+      case 0x0: break;                                               // rien
+      case 0x1: ring.setPixelColor(i, ring.Color(COL_R, 0, 0)); break;          // H
+      case 0x2: ring.setPixelColor(i, ring.Color(0, COL_G, 0)); break;          // M
+      case 0x4: ring.setPixelColor(i, ring.Color(35, 35, 35)); break;            // W (blanc faible)
+      case 0x8: ring.setPixelColor(i, ring.Color(0, 0, COL_B)); break;          // S
+
+      case 0x3: ring.setPixelColor(i, ring.Color(COL_R, COL_G, 0)); break;      // H+M = jaune
+      case 0x5: ring.setPixelColor(i, ring.Color(COL_R, 0, 0)); break;          // H+W = rouge
+      case 0x9: ring.setPixelColor(i, ring.Color(COL_R, 0, COL_B)); break;      // H+S = magenta
+      case 0x6: ring.setPixelColor(i, ring.Color(40, 170, 55)); break;           // M+W = vert clair (moins blanc)
+      case 0xA: ring.setPixelColor(i, ring.Color(0, 110, 35)); break;           // M+S = cyan-vert
+      case 0xC: ring.setPixelColor(i, ring.Color(40, 60, 170)); break;           // W+S = bleu clair (moins blanc)
+
+      case 0x7: ring.setPixelColor(i, ring.Color(COL_R, COL_G, 0)); break;      // H+M+W = jaune
+      case 0xB: ring.setPixelColor(i, ring.Color(COL_R, COL_G, COL_B)); break;  // H+M+S = blanc
+      case 0xD: ring.setPixelColor(i, ring.Color(COL_R, 0, COL_B)); break;      // H+W+S = magenta (melange H+S conserve)
+      case 0xE: ring.setPixelColor(i, ring.Color(35, 170, 95)); break;           // M+S+W = cyan-vert clair (moins blanc)
+      case 0xF: ring.setPixelColor(i, ring.Color(COL_R, COL_G, COL_B)); break;  // H+M+S+W = blanc
+
       default: break;
     }
   }
